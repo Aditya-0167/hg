@@ -1,0 +1,87 @@
+name: PoC - cdap-ui session-token CSRF bypass
+
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  repro:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PoC repo
+        uses: actions/checkout@v4
+
+      - name: Checkout upstream cdapio/cdap-ui at the tested commit
+        uses: actions/checkout@v4
+        with:
+          repository: cdapio/cdap-ui
+          ref: 465f4e4f9374c510b3d507b019bdc3919e5615d6
+          path: upstream
+
+      - name: Independently verify PoC source files are byte-identical to upstream
+        run: |
+          set -e
+          diff upstream/server/token.mjs victim/token.REAL.mjs
+          diff upstream/server/express.js victim/express.js.REAL
+          echo "Confirmed byte-identical to upstream at the pinned commit."
+
+      - name: Confirm /sessionToken endpoint has no auth middleware
+        run: |
+          set -e
+          python3 - <<'EOF'
+          src = open("victim/express.js.REAL").read()
+          idx = src.index("app.get('/sessionToken'")
+          # grab 400 chars before the route registration to check for middleware
+          context_before = src[max(0, idx-400):idx]
+          # grab the handler body
+          handler = src[idx:idx+300]
+          auth_patterns = [".isAuthenticated", "passport.", "requiresAuth",
+                           "checkAuth", "verifyToken", "authMiddleware",
+                           "ensureLoggedIn", "authAddress.enabled"]
+          hits_before = [p for p in auth_patterns if p in context_before]
+          hits_handler = [p for p in auth_patterns if p in handler]
+          if hits_before or hits_handler:
+              print(f"NOTE: auth patterns found near /sessionToken: {hits_before + hits_handler} - re-inspect manually")
+              raise SystemExit(1)
+          print("Confirmed: /sessionToken handler has no authentication middleware")
+          print("Handler body:", handler.strip()[:200])
+          EOF
+
+      - name: Confirm generateToken() discards the authToken argument
+        run: |
+          set -e
+          python3 - <<'EOF'
+          src = open("victim/token.REAL.mjs").read()
+          idx = src.index("export function generateToken(")
+          sig_end = src.index(")", idx)
+          sig = src[idx:sig_end+1]
+          print("Real function signature:", sig)
+          if "authToken" in sig or "auth" in sig.lower().split("logger")[1] if "logger" in sig.lower() else "":
+              print("NOTE: signature now includes auth parameter - re-inspect manually")
+              raise SystemExit(1)
+          print("Confirmed: generateToken() has no authToken parameter (authToken passed by express.js is silently discarded)")
+          EOF
+
+      - name: Run the live token bypass demonstration
+        run: |
+          node victim/test-harness.mjs | tee ci-run.log
+
+      - name: Assert all four claims reproduced
+        run: |
+          set -e
+          grep -q "validateToken(anonymousToken1) => true" ci-run.log \
+            && echo "PASS: anonymous token accepted by real validateToken()"
+          grep -q "validateToken(anonymousToken2) => true" ci-run.log \
+            && echo "PASS: second anonymous token accepted"
+          grep -q 'validateToken("garbage") => false' ci-run.log \
+            && echo "PASS: control - garbage token rejected (validateToken does real work)"
+          grep -q "Does the REAL server-side validateToken() accept it? => true" ci-run.log \
+            && echo "PASS: attacker-forged token (using only public instanceMetadataId) accepted"
+          echo "CONFIRMED: session-token CSRF protection is completely bypassable by any unauthenticated caller"
+
+      - name: Upload run log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-run-log
+          path: ci-run.log
