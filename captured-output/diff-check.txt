@@ -1,0 +1,3 @@
+=== Confirming PoC source files are byte-identical to upstream ===
+token.mjs: IDENTICAL
+express.js: IDENTICAL

